@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOLMAR BAY: Neon Tide — open-world crime game</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1526;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .panel { background: rgba(10, 18, 30, 0.72); border: 1px solid rgba(255,255,255,0.16);
+    border-radius: 10px; backdrop-filter: blur(2px); }
+  /* Top-left: health, cash, respect. */
+  #topleft { position: absolute; top: 12px; left: 12px; padding: 10px 14px; min-width: 240px; }
+  #health-bar { width: 220px; height: 14px; background: rgba(255,255,255,0.18); border-radius: 7px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: #37d67a; transition: width 0.2s; }
+  #health-text { font-size: 12px; font-weight: 700; margin-top: 3px; letter-spacing: 0.5px; }
+  #cash { font-size: 26px; font-weight: 800; color: #7dff9a; margin-top: 6px; text-shadow: 0 2px 4px rgba(0,0,0,0.6); }
+  #respect { font-size: 12px; font-weight: 700; color: #ffd166; letter-spacing: 1px; }
+  /* Top-right: wanted stars + kill feed. */
+  #topright { position: absolute; top: 12px; right: 12px; text-align: right; }
+  #stars { font-size: 30px; letter-spacing: 4px; color: #ffd166; text-shadow: 0 0 12px rgba(255,180,0,0.7); }
+  #stars.hot { color: #ff3355; text-shadow: 0 0 14px rgba(255,0,60,0.9); }
+  #stars.flash { animation: starflash 0.4s ease-out 2; }
+  @keyframes starflash { 0% { transform: scale(1.35); } 100% { transform: scale(1); } }
+  #killfeed { margin-top: 8px; font-size: 13px; font-weight: 600; }
+  .feed-line { background: rgba(10,18,30,0.72); border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 6px; padding: 4px 8px; margin-top: 4px; color: #ffe9a8; }
+  /* Top-centre: mission objective. */
+  #objective-box { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    padding: 8px 18px; text-align: center; max-width: 560px; }
+  #objective-title { font-size: 11px; font-weight: 800; color: #ffe600; letter-spacing: 2px; }
+  #objective { font-size: 15px; font-weight: 600; margin-top: 2px; }
+  /* Bottom-left: radio chatter. */
+  #radio { position: absolute; left: 12px; bottom: 12px; width: 360px; font-size: 13px; font-weight: 600; }
+  .radio-line { background: rgba(10,18,30,0.66); border-left: 3px solid #00e5ff; border-radius: 4px;
+    padding: 5px 9px; margin-top: 4px; transition: opacity 1s; }
+  .radio-line.fade { opacity: 0.35; }
+  /* Bottom-right: minimap + speed + clock. */
+  #bottomright { position: absolute; right: 12px; bottom: 12px; text-align: right; }
+  #minimap { width: 150px; height: 150px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.35);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.5); }
+  #speed { font-size: 24px; font-weight: 800; text-shadow: 0 2px 4px rgba(0,0,0,0.7); }
+  #clock { font-size: 13px; font-weight: 700; color: #ffe9a8; }
+  #weapon-box { position: absolute; right: 12px; bottom: 218px; padding: 8px 12px; text-align: right; }
+  #weapon { font-size: 15px; font-weight: 800; letter-spacing: 1px; }
+  #ammo { font-size: 20px; font-weight: 800; color: #ffe600; }
+  #hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+    font-size: 14px; font-weight: 700; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+    display: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff;
+    box-shadow: 0 0 4px #000; }
+  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  #crosshair::after { left: 0; top: 8px; width: 18px; height: 2px; }
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 6; opacity: 0;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(255,0,40,0.55) 100%); }
+  #toast { position: absolute; top: 96px; left: 50%; transform: translateX(-50%);
+    background: rgba(10,18,30,0.85); border: 1px solid #ffe600; color: #ffe600; border-radius: 8px;
+    padding: 8px 16px; font-size: 15px; font-weight: 800; opacity: 0; transition: opacity 0.25s; }
+  #toast.show { opacity: 1; }
+  #banner { position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%) scale(0.9);
+    text-align: center; opacity: 0; transition: opacity 0.3s, transform 0.3s; pointer-events: none; }
+  #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  .banner-title { font-size: 52px; font-weight: 900; letter-spacing: 3px; color: #ffe600;
+    text-shadow: 0 4px 0 #b8860b, 0 8px 24px rgba(0,0,0,0.7); }
+  .banner-sub { font-size: 18px; font-weight: 700; color: #fff; text-shadow: 0 2px 6px #000; }
+  /* Full-screen overlays. */
+  .overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(160deg, rgba(20,40,80,0.82), rgba(120,20,80,0.78)); pointer-events: auto; }
+  .card { max-width: 620px; margin: 16px; padding: 34px 40px; text-align: center;
+    background: rgba(8, 14, 26, 0.88); border: 2px solid #ff2e88; border-radius: 16px;
+    box-shadow: 0 12px 60px rgba(0,0,0,0.6); }
+  .card h1 { margin: 0 0 4px; font-size: 54px; font-weight: 900; letter-spacing: 2px; color: #ffe600;
+    text-shadow: 0 4px 0 #b8860b; }
+  .card h2 { margin: 0 0 14px; font-size: 22px; font-weight: 800; color: #00e5ff; letter-spacing: 4px; }
+  .card p { font-size: 15px; line-height: 1.55; color: #e8ecf2; }
+  .card .controls { font-size: 13px; line-height: 1.9; color: #ffd166; font-weight: 600; }
+  .bigbtn { display: inline-block; margin-top: 18px; padding: 13px 42px; font-size: 20px; font-weight: 900;
+    letter-spacing: 2px; color: #101828; background: #ffe600; border: 0; border-radius: 10px; cursor: pointer; }
+  .bigbtn:hover { background: #fff06a; }
+  #end-title.wasted { color: #ff3355; }
+  #end-title.busted { color: #4da6ff; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js" } }
+</script>
+</head>
+<body>
+<canvas id="game" aria-label="SOLMAR BAY: Neon Tide — open-world crime game. Steal cars, lose the cops, run missions across Solmar Bay."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="hud">
+  <div id="topleft" class="panel">
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <div id="health-text">100 HP</div>
+    <div id="cash">$0</div>
+    <div id="respect">RESPECT 0</div>
+  </div>
+  <div id="objective-box" class="panel">
+    <div id="objective-title">MISSION: FIRST WHEELS</div>
+    <div id="objective">Steal a car and deliver it to Sal's Garage</div>
+  </div>
+  <div id="topright">
+    <div id="stars">☆☆☆☆☆</div>
+    <div id="killfeed"></div>
+  </div>
+  <div id="radio"></div>
+  <div id="bottomright">
+    <canvas id="minimap" width="150" height="150"></canvas>
+    <div id="speed"></div>
+    <div id="clock">DAY 14:30</div>
+  </div>
+  <div id="weapon-box" class="panel">
+    <div id="weapon">FISTS</div>
+    <div id="ammo">—</div>
+  </div>
+  <div id="hint"></div>
+  <div id="crosshair"></div>
+  <div id="toast"></div>
+  <div id="banner"></div>
+</div>
+<div id="vignette"></div>
+
+<div id="start-screen" class="overlay">
+  <div class="card">
+    <h1>SOLMAR BAY</h1>
+    <h2>NEON TIDE</h2>
+    <p>You are Ken, a wheelman fresh off the bus in Solmar Bay — sun, palms, neon and
+    a police force that never sleeps. Sal runs the garage on the west side and he has
+    work for you: three jobs, one long night, and a whole city to steal.</p>
+    <p class="controls">WASD move &nbsp;·&nbsp; Mouse look &nbsp;·&nbsp; Shift sprint &nbsp;·&nbsp; Space jump / handbrake<br>
+    E steal / exit car &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; F punch &nbsp;·&nbsp; R reload &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</p>
+    <p>Steal a car. Lose the cops. Get paid. The tide is coming in.</p>
+    <button class="bigbtn" id="play-btn">START ENGINE</button>
+  </div>
+</div>
+
+<div id="pause-screen" class="overlay" style="display:none">
+  <div class="card">
+    <h1 style="font-size:40px">PAUSED</h1>
+    <p>Solmar Bay waits for no one. Well — right now it does.</p>
+    <p class="controls">P or Esc to resume &nbsp;·&nbsp; M mute</p>
+    <button class="bigbtn" id="resume-btn">RESUME</button>
+  </div>
+</div>
+
+<div id="end-screen" class="overlay" style="display:none">
+  <div class="card">
+    <h1 id="end-title" style="font-size:44px">WASTED</h1>
+    <p id="end-text"></p>
+    <button class="bigbtn" id="retry-btn">TRY AGAIN</button>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
