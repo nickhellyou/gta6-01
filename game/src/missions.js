@@ -1,205 +1,186 @@
-// missions.js — the story: three chained missions with an objective marker,
-// a beacon in the world, a tracker on the HUD, cash + respect rewards, and
-// fail states with retry. M1 teaches stealing, M2 teaches combat, M3 is the
-// night chase that ends the arc.
+// The three chained missions of Solmar Bay: First Wheels, Pier Pressure
+// and Neon Tide. A glowing beacon marks the current objective; completing
+// one unlocks the next, and getting Busted or Wasted restarts the current one.
+
 import * as THREE from 'three';
-import { CFG, MISSION_DEFS } from './config.js';
-import { dist2D } from './random.js';
-import { makeRival } from './combat.js';
+import { MISSIONS, LANDMARKS } from './config.js';
 
-export function createMissions(G) {
-  // The beacon: a tall light pillar + ring at the current objective.
-  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xffe600, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
-  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 60, 12, 1, true), beaconMat);
-  beacon.position.y = 30;
-  beacon.visible = false;
-  G.scene.add(beacon);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xffe600, transparent: true, opacity: 0.8, side: THREE.DoubleSide });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(2.2, 3.2, 32), ringMat);
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.15;
-  ring.visible = false;
-  G.scene.add(ring);
+function makeBeacon() {
+  const geo = new THREE.CylinderGeometry(2.2, 2.2, 26, 16, 1, true);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x00e5ff,
+    transparent: true,
+    opacity: 0.65,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.y = 13;
+  return mesh;
+}
 
-  const state = {
-    index: 0,               // 0..2, or 3 when the story is done
-    stage: 'intro',         // intro | active | done
-    target: null,           // {x, z, label}
-    collected: 0,
-    collectT: 0,
-    packageHeld: false,
-    escaped: false,
-    timer: 0,
-  };
+function makeMarkerRing() {
+  const geo = new THREE.TorusGeometry(3, 0.28, 8, 32);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffc233 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.y = 0.3;
+  return mesh;
+}
 
-  function currentDef() { return MISSION_DEFS[state.index] || null; }
-
-  function setTarget(x, z, label) {
-    state.target = { x, z, label };
-    beacon.position.x = x; beacon.position.z = z; beacon.visible = true;
-    ring.position.x = x; ring.position.z = z; ring.visible = true;
-  }
-
-  function clearTarget() {
-    state.target = null;
-    beacon.visible = false; ring.visible = false;
-  }
-
-  function startMission(i) {
-    state.index = i;
-    state.collected = 0;
-    state.collectT = 0;
-    state.packageHeld = false;
-    state.escaped = false;
-    state.stage = 'active';
-    const def = MISSION_DEFS[i];
-    G.events.radio('Sal: ' + def.brief);
-    G.events.toast('MISSION: ' + def.name);
-    G.audio.sting();
-    if (i === 0) {
-      setTarget(G.city.garagePos.x, G.city.garagePos.z, "SAL'S GARAGE");
-      G.hud.setObjective("Steal a car and deliver it to Sal's Garage");
-    } else if (i === 1) {
-      const shop = G.city.pierShops[0];
-      setTarget(shop.x, shop.z, shop.name + ' (1/3)');
-      G.hud.setObjective('Collect protection cash at the pier shops (0/3)');
-    } else if (i === 2) {
-      G.night = true;
-      G.events.radio('RADIO: All units, package courier on the move. 3 stars, do not let them slip');
-      const pkg = { x: 81, z: -81 };
-      setTarget(pkg.x, pkg.z, 'THE PACKAGE');
-      G.hud.setObjective('Pick up the package at Neon Row (81, -81)');
-      G.events.raiseWanted(3, 'Package run flagged, Neon Row');
-    }
-  }
-
-  function completeMission() {
-    const def = MISSION_DEFS[state.index];
-    G.cash += def.reward;
-    G.respect += def.respect;
-    G.events.toast('MISSION COMPLETE: ' + def.name + '  +$' + def.reward);
-    G.events.radio('Sal: Beautiful work, kid. That was clean.');
-    G.audio.sting();
-    G.hud.setObjective('Mission complete — talk to Sal for the next job');
-    clearTarget();
-    state.stage = 'done';
-    state.timer = 0;
-    if (state.index === 0) {
-      // Sal arms you: the pistol, with a full magazine.
-      G.player.armed = true;
-      G.player.ammo = CFG.pistolMag;
-      G.player.reserve = CFG.pistolReserve;
-      G.events.radio('Sal: Take this pistol. You earned it. R to reload.');
-    }
-    if (state.index === 2) {
-      G.night = false;
-      G.events.radio('Sal: The tide turned tonight. Solmar Bay is ours, kid.');
-    }
-    G.save();
-  }
-
-  function failMission(reason) {
-    G.events.toast('MISSION FAILED: ' + reason);
-    G.events.radio('Sal: Forget it. Come back when you are ready.');
-    G.audio.fail();
-    state.stage = 'intro';
-    state.timer = 0;
-    clearTarget();
-    G.night = false;
-    // Rivals from the failed attempt stand down.
-    for (const r of G.rivals) r.alive = false;
-    G.save();
-  }
-
-  // M2: a rival crew ambushes each collection.
-  function spawnRivalAmbush(G2, x, z) {
-    for (let i = 0; i < 2; i++) {
-      const r = makeRival(G2.scene, G2.rng, x + G2.rng.range(-8, 8), z + G2.rng.range(-8, 8));
-      G2.rivals.push(r);
-    }
-    G2.events.radio('Rocco: This turf is ours, kid. Walk away.');
-    G2.audio.sirenBurst();
-  }
-
-  function update(dt) {
-    const def = currentDef();
-    if (!def) { G.hud.setObjective('Story complete — free roam Solmar Bay'); return; }
-    if (state.stage === 'intro') {
-      state.timer += dt;
-      if (state.timer > 2.5) startMission(state.index);
-      return;
-    }
-    if (state.stage !== 'active') {
-      state.timer += dt;
-      // A short breather, then the next mission starts itself.
-      if (state.timer > 4 && state.index < 2) startMission(state.index + 1);
-      else if (state.timer > 4) G.hud.setObjective('Story complete — free roam Solmar Bay');
-      return;
-    }
-    const px = G.player.pos.x, pz = G.player.pos.z;
-    const t = state.target;
-    // Pulse the beacon ring so the objective reads from across the city.
-    ring.scale.setScalar(1 + Math.sin(performance.now() / 300) * 0.12);
-    if (!t) return;
-    const d = dist2D(px, pz, t.x, t.z);
-    if (state.index === 0) {
-      // M1: only counts while driving the stolen car into the garage yard.
-      if (d < 9 && G.player.inCar) {
-        completeMission();
-      } else if (d < 9 && !G.player.inCar) {
-        G.hud.setObjective('Bring the CAR to the garage — on foot does not count');
-      } else {
-        G.hud.setObjective("Steal a car and deliver it to Sal's Garage");
-      }
-    } else if (state.index === 1) {
-      const shop = G.city.pierShops[state.collected];
-      if (shop && d < 6) {
-        state.collectT += dt;
-        G.hud.setObjective(`Collecting cash at ${shop.name}… ${Math.ceil(3 - state.collectT)}s`);
-        if (state.collectT >= 3) {
-          state.collectT = 0;
-          state.collected += 1;
-          G.cash += 150;
-          G.events.radio('Sal: Cash in. ' + state.collected + ' of 3 shops done.');
-          G.audio.pickup();
-          if (state.collected >= 3) { completeMission(); return; }
-          const next = G.city.pierShops[state.collected];
-          setTarget(next.x, next.z, next.name + ` (${state.collected + 1}/3)`);
-          spawnRivalAmbush(G, next.x, next.z);
-        }
-      } else if (shop) {
-        state.collectT = 0;
-        G.hud.setObjective(`Collect protection cash at ${shop.name} (${state.collected}/3)`);
-      }
-    } else if (state.index === 2) {
-      if (!state.packageHeld) {
-        if (d < 6) {
-          state.packageHeld = true;
-          G.events.radio('Sal: Package secured. Now cross town to the Marina and LOSE them.');
-          G.audio.pickup();
-          setTarget(-81, 108, 'MARINA DEL SOL — LOSE THE COPS');
-          G.hud.setObjective('Deliver the package to Marina Del Sol, then lose the cops');
-        }
-      } else if (d < 9) {
-        if (G.wanted === 0) {
-          completeMission();
-        } else {
-          G.hud.setObjective('You are here — but lose the cops first! (' + G.wanted + ' stars)');
-        }
-      }
-    }
-    // Failing: the player dies or gets busted mid-mission (handled by main),
-    // and M3 fails if the package is dropped — here, if wanted hits 5 the
-    // heat is too much and the run is blown.
-    if (state.index === 2 && G.wanted >= 5 && state.packageHeld) {
-      failMission('The heat got too hot — the package is blown');
-    }
-  }
-
+export function createMissions(scene) {
+  const beacon = makeBeacon();
+  const ring = makeMarkerRing();
+  scene.add(beacon);
+  scene.add(ring);
   return {
-    state, startMission, completeMission, failMission, update,
-    // Move the beacon + ring to a new objective (used by screenshot staging).
-    setObjectiveTarget(x, z, label) { setTarget(x, z, label); },
-    objectiveTarget() { return state.target; },
+    index: 0,          // which mission (0..2); 3 = all done
+    stage: 0,          // stage inside the current mission
+    collected: 0,      // pier shops collected (M2)
+    beacon,
+    ring,
+    target: null,      // { x, z } of the current objective
+    done: false,
+    rivalsSpawned: false,
   };
+}
+
+function setTarget(missions, x, z) {
+  missions.target = { x, z };
+  missions.beacon.position.set(x, 13, z);
+  missions.ring.position.set(x, 0.3, z);
+  missions.beacon.visible = true;
+  missions.ring.visible = true;
+}
+
+function hideTarget(missions) {
+  missions.beacon.visible = false;
+  missions.ring.visible = false;
+  missions.target = null;
+}
+
+function completeMission(state, reward) {
+  const missions = state.missions;
+  state.cash += reward;
+  state.audio.cash();
+  state.audio.missionDone();
+  state.respect += 10;
+  const m = MISSIONS[missions.index];
+  state.hud.flash(`${m.name} complete — +$${reward}`);
+  state.hud.addKillFeed(`${m.name} complete — +$${reward}`);
+  missions.index += 1;
+  missions.stage = 0;
+  missions.collected = 0;
+  missions.rivalsSpawned = false;
+  if (missions.index >= MISSIONS.length) {
+    missions.done = true;
+    hideTarget(missions);
+    state.hud.setObjective('Harbor Legend — Solmar Bay is yours. Free roam.');
+  }
+}
+
+function spawnRivals(state) {
+  const missions = state.missions;
+  if (missions.rivalsSpawned) return;
+  missions.rivalsSpawned = true;
+  for (let i = 0; i < 3; i++) {
+    const shop = LANDMARKS.pierShops[i];
+    state.combat.spawnRival(shop.x + 4 + i * 2, shop.z + 6);
+  }
+  state.hud.flash('Rival crew on the pier — watch your back!');
+}
+
+// restart the current mission from its first stage (after Busted / Wasted)
+export function restartMission(state) {
+  const missions = state.missions;
+  missions.stage = 0;
+  missions.collected = 0;
+  missions.rivalsSpawned = false;
+  if (missions.index < MISSIONS.length) {
+    const m = MISSIONS[missions.index];
+    state.hud.setObjective(m.objective);
+    state.hud.flash(`${m.name} restarted`);
+  }
+}
+
+export function updateMissions(state, dt) {
+  const missions = state.missions;
+  if (missions.done) return;
+  const m = MISSIONS[missions.index];
+  const p = state.player.pos;
+  const near = (x, z, r) => Math.hypot(p.x - x, p.z - z) < r;
+
+  if (missions.index === 0) {
+    // M1 First Wheels: steal a car, then bring it to Sal's Garage
+    if (missions.stage === 0) {
+      hideTarget(missions);
+      state.hud.setObjective(m.objective);
+      if (!state.player.onFoot) {
+        missions.stage = 1;
+        setTarget(missions, LANDMARKS.salsGarage.x, LANDMARKS.salsGarage.z);
+        state.hud.flash('Got wheels — take it to Sal\'s Garage');
+      }
+    } else if (missions.stage === 1) {
+      // the garage sits on its block; arriving on the road beside it counts
+      if (near(LANDMARKS.salsGarage.x, LANDMARKS.salsGarage.z, 24)) {
+        if (m.unlock === 'pistol') {
+          state.weapon = 'pistol';
+          state.ammo = 12;
+          state.hud.flash('Pistol unlocked — click to shoot, R to reload');
+        }
+        completeMission(state, m.reward);
+      }
+    }
+  } else if (missions.index === 1) {
+    // M2 Pier Pressure: collect cash from the 3 pier shops
+    if (missions.stage === 0) {
+      spawnRivals(state);
+      missions.stage = 1;
+      const shop = LANDMARKS.pierShops[0];
+      setTarget(missions, shop.x, shop.z);
+      state.hud.setObjective('Collect cash from 3 pier shops (0/3)');
+    } else {
+      const shop = LANDMARKS.pierShops[missions.collected];
+      if (shop && near(shop.x, shop.z, 5.5)) {
+        missions.collected += 1;
+        state.cash += 200;
+        state.audio.cash();
+        state.hud.flash(`Pier cash collected (${missions.collected}/3) — +$200`);
+        if (missions.collected >= 3) {
+          completeMission(state, m.reward);
+        } else {
+          const next = LANDMARKS.pierShops[missions.collected];
+          setTarget(missions, next.x, next.z);
+          state.hud.setObjective(`Collect cash from 3 pier shops (${missions.collected}/3)`);
+        }
+      }
+    }
+  } else if (missions.index === 2) {
+    // M3 Neon Tide: night delivery to Neon Row, then shake a 3-star heat
+    if (missions.stage === 0) {
+      state.hour = 21.5;
+      missions.stage = 1;
+      setTarget(missions, LANDMARKS.neonRow.x, LANDMARKS.neonRow.z);
+      state.hud.setObjective('Deliver the package to Neon Row at night');
+      state.hud.flash('Night run — deliver the package to Neon Row');
+    } else if (missions.stage === 1) {
+      // Neon Row sits on its block; arriving on the road beside it counts
+      if (near(LANDMARKS.neonRow.x, LANDMARKS.neonRow.z, 22)) {
+        missions.stage = 2;
+        hideTarget(missions);
+        state.wanted = 3;
+        state.hud.setObjective('Shake the 3-star heat — get clean');
+        state.hud.flash('Package delivered — now shake the heat!');
+      }
+    } else if (missions.stage === 2) {
+      if (state.wanted === 0) {
+        completeMission(state, m.reward);
+      }
+    }
+  }
+
+  // beacon pulse
+  const t = performance.now() * 0.002;
+  missions.beacon.material.opacity = 0.65 + Math.sin(t) * 0.15;
+  missions.ring.scale.setScalar(1 + Math.sin(t * 1.4) * 0.12);
 }

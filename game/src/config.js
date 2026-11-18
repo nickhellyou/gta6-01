@@ -1,76 +1,115 @@
-// config.js — every tunable number for SOLMAR BAY lives here, in one place.
-// Nothing in this file touches the DOM or three.js; other modules read it.
-export const CFG = {
-  cityBlocks: 5,          // 5 x 5 blocks of buildings
-  blockSize: 40,          // metres per block (building + sidewalk)
-  streetWidth: 14,        // metres of road between blocks
-  cityHalf: 135,          // playable half-extent in metres
+// Solmar Bay: Neon Tide — world constants, tuning and mission definitions.
+// All systems read these values; nothing here touches the DOM or three.js.
+
+export const WORLD = {
+  size: 420,            // city spans -210..210 on x and z
+  roadGap: 42,          // distance between road centre lines
+  roadWidth: 11,
+  blockSize: 31,        // building block side
+  seaZ: 210,            // sea starts at z > seaZ (south edge)
+  pierZ: 258,           // pier deck extends to this z
+  pierX: -21,           // pier centre x
+  groundY: 0,
+};
+
+export const COLORS = {
+  skyDay: 0x87b5e0,
+  skyDusk: 0xff9a5c,
+  skyNight: 0x0b1026,
+  sea: 0x1e6f8e,
+  sand: 0xd9c08a,
+  asphalt: 0x2e2e33,
+  sidewalk: 0x8f8a80,
+  building: [0xe8dcc8, 0xd8c9a8, 0xc9b18c, 0xb8a888, 0xe0cfa8, 0xd0b890],
+  glass: 0x6fb7d9,
+  neonPink: 0xff2e88,
+  neonCyan: 0x22e6ff,
+  neonGold: 0xffc233,
+  palm: 0x2f7d4f,
+  trunk: 0x7a5a38,
+  carPalette: [0xd23b3b, 0x2e6fd8, 0xe8b93b, 0x3fae6a, 0xe8e4da, 0x222226, 0x7a4fd0, 0xe07b2e],
+  policeCar: 0x1c2733,
+  policeLightR: 0xff2222,
+  policeLightB: 0x2266ff,
+};
+
+export const TUNING = {
+  walkSpeed: 6,
+  sprintSpeed: 10,
+  jumpSpeed: 8,
   gravity: 22,
-  walkSpeed: 7,
-  sprintSpeed: 11,
-  jumpSpeed: 8.5,
-  playerRadius: 0.55,
-  playerHeight: 1.8,
   carAccel: 16,
-  carBrake: 28,
+  carBrake: 26,
+  carReverseAccel: 9,
   carMaxSpeed: 34,
-  carReverseMax: 10,
-  carSteer: 0.55,
-  carGrip: 3.2,
-  maxWanted: 5,
-  wantedDecaySeconds: 18,
+  carTurn: 1.9,
+  carDrag: 0.6,
+  handbrakeDrag: 3.2,
   pistolDamage: 34,
-  pistolMag: 12,
-  pistolReserve: 60,
-  punchDamage: 12,
+  pistolAmmo: 12,
+  punchDamage: 18,
   punchRange: 2.2,
-  rivalHp: 60,
-  copHp: 80,
-  playerMaxHp: 100,
-  copCarSpeed: 30,
-  trafficSpeed: 9,
-  pedSpeed: 1.6,
-  dayLengthSeconds: 240,
-  saveKey: 'solmar-bay-save-v1',
+  playerMaxHealth: 100,
+  wantedDecaySeconds: 14,
+  policeChaseSpeed: 30,
+  copCatchDistance: 1.6,
+  trafficCount: 14,
+  pedCount: 18,
 };
 
-// Named places the player can actually see in the world. The HUD, the radio
-// chatter and the mission text all use these exact names so the city feels
-// like one place instead of a generic grid.
-export const PLACES = {
-  boulevard: 'PALMERA BOULEVARD',
-  pier: 'SOLMAR PIER',
-  tower: 'CROWN TOWER',
-  neonRow: 'NEON ROW',
-  marina: 'MARINA DEL SOL',
-  garage: "SAL'S GARAGE",
-};
-
-export const MISSION_DEFS = [
+export const MISSIONS = [
   {
-    id: 'm1', name: 'First Wheels',
-    brief: "Sal needs wheels. Steal any car and bring it to Sal's Garage.",
-    reward: 500, respect: 10,
+    id: 'first-wheels',
+    name: "M1 · First Wheels",
+    briefing: "Ken needs wheels. Steal any car and bring it to Sal's Garage.",
+    objective: 'Steal a car, then drive to the garage marker',
+    reward: 500,
+    unlock: 'pistol',
   },
   {
-    id: 'm2', name: 'Pier Pressure',
-    brief: 'Collect protection cash at 3 shops on Solmar Pier. Rivals will not like it.',
-    reward: 800, respect: 20,
+    id: 'pier-pressure',
+    name: 'M2 · Pier Pressure',
+    briefing: 'Collect the protection cash from the 3 pier shops. Rival crew will not like it.',
+    objective: 'Collect cash from 3 pier shops (0/3)',
+    reward: 800,
+    unlock: null,
   },
   {
-    id: 'm3', name: 'Neon Tide',
-    brief: 'Night run: carry the package across town with the whole force on your tail, then lose them.',
-    reward: 1500, respect: 40,
+    id: 'neon-tide',
+    name: 'M3 · Neon Tide',
+    briefing: 'Night run. Deliver the package to Neon Row, then shake a 3-star heat.',
+    objective: 'Deliver the package to Neon Row at night',
+    reward: 1200,
+    unlock: null,
   },
 ];
 
-// Palette: bright warm afternoon sun, pastel walls, neon accents. Deliberately
-// NOT a dark dusk look — the judge reads dark as empty.
-export const PALETTE = {
-  skyTop: 0x3f8fe0, skyHorizon: 0xffe3a8, sun: 0xfff2c8,
-  ground: 0x9a8f7a, road: 0x3c3f46, sidewalk: 0xd8cdb8,
-  sand: 0xeed9a4, sea: 0x2e9fc4,
-  buildings: [0xffb59e, 0xffd166, 0x8ecae6, 0xf4a7b9, 0x90e0a0, 0xc9b6f2, 0xff8f6b, 0x7fd1c0],
-  neon: [0xff2e88, 0x00e5ff, 0xffe600, 0x7cff00, 0xff6a00],
-  carColors: [0xe63946, 0x2a9d8f, 0xf4d35e, 0x4361ee, 0xf72585, 0xffffff, 0x222222, 0x06d6a0, 0xff9f1c],
+export const LANDMARKS = {
+  crownTower: { x: -84, z: -84, name: 'Crown Tower' },
+  salsGarage: { x: 42, z: 126, name: "Sal's Garage" },
+  pierShops: [
+    { x: -33, z: 232, name: 'Pier Shop 1' },
+    { x: -21, z: 244, name: 'Pier Shop 2' },
+    { x: -9, z: 232, name: 'Pier Shop 3' },
+  ],
+  neonRow: { x: 42, z: -42, name: 'Neon Row' },
+  marina: { x: 126, z: 168, name: 'Marina Del Sol' },
+  hospital: { x: -84, z: -42, name: 'Harbor Clinic' },
 };
+
+export const SAVE_KEY = 'tidekeeper-solmar-bay-save-v1';
+
+export function clamp(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function angleLerp(a, b, t) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}

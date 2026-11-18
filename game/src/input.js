@@ -1,75 +1,80 @@
-// input.js — keyboard + mouse state for third-person play. Held keys are read
-// every fixed step; one-shot presses (interact, punch, reload, pause, mute)
-// are queued and taken once, so a press between frames is never lost.
-export const ACT_INTERACT = 1;
-export const ACT_PUNCH = 2;
-export const ACT_RELOAD = 4;
-export const ACT_PAUSE = 8;
-export const ACT_MUTE = 16;
-export const ACT_SHOOT = 32;
+// Keyboard + mouse input with pointer lock for the orbit camera.
+// Tracks held keys, click edges and mouse deltas; the game loop consumes
+// the deltas each frame so camera movement stays frame-rate independent.
 
-export function createInput(canvas) {
-  const keys = new Set();
-  let actions = 0;
-  let mouseDX = 0;
-  let mouseDY = 0;
-  let mouseDown = false;
-  let dragging = false;
-  let lastX = 0;
-  let lastY = 0;
+export class Input {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseDown = false;
+    this.mouseClicked = false;
+    this.locked = false;
+    this.onFirstClick = null;
+    this._bind();
+  }
 
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') e.preventDefault();
-    if (e.repeat) return;
-    keys.add(e.code);
-    if (e.code === 'KeyE') actions |= ACT_INTERACT;
-    if (e.code === 'KeyF') actions |= ACT_PUNCH;
-    if (e.code === 'KeyR') actions |= ACT_RELOAD;
-    if (e.code === 'KeyP' || e.code === 'Escape') actions |= ACT_PAUSE;
-    if (e.code === 'KeyM') actions |= ACT_MUTE;
-  });
-  window.addEventListener('keyup', (e) => keys.delete(e.code));
-  window.addEventListener('blur', () => keys.clear());
+  _bind() {
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      this.pressed.add(e.code);
+    });
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+    });
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!this.locked) return;
+      this.mouseDX += e.movementX || 0;
+      this.mouseDY += e.movementY || 0;
+    });
+    document.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      this.mouseDown = true;
+      this.mouseClicked = true;
+      if (this.onFirstClick) {
+        const cb = this.onFirstClick;
+        this.onFirstClick = null;
+        cb();
+      }
+    });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.mouseDown = false;
+    });
+    document.addEventListener('pointerlockchange', () => {
+      this.locked = document.pointerLockElement === this.canvas;
+    });
+  }
 
-  canvas.addEventListener('mousedown', (e) => {
-    mouseDown = true; dragging = true; lastX = e.clientX; lastY = e.clientY;
-    if (e.button === 0) actions |= ACT_SHOOT;
-  });
-  window.addEventListener('mouseup', () => { mouseDown = false; dragging = false; });
-  window.addEventListener('mousemove', (e) => {
-    if (document.pointerLockElement === canvas) {
-      mouseDX += e.movementX; mouseDY += e.movementY;
-    } else if (dragging) {
-      mouseDX += e.clientX - lastX; mouseDY += e.clientY - lastY;
-      lastX = e.clientX; lastY = e.clientY;
-    }
-  });
-  canvas.addEventListener('click', () => {
-    // Pointer lock gives real mouse-look; drag works as a fallback (headless too).
-    if (document.pointerLockElement !== canvas && canvas.requestPointerLock) {
-      try { canvas.requestPointerLock(); } catch { /* headless: drag still works */ }
-    }
-  });
+  // request pointer lock on the game canvas (called from a user gesture)
+  lockPointer() {
+    if (!this.canvas.requestPointerLock) return;
+    try {
+      const p = this.canvas.requestPointerLock();
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) {}
+  }
 
-  return {
-    held(code) { return keys.has(code); },
-    // -1..1 forward/back and strafe from WASD + arrows.
-    move() {
-      const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0)
-        - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-      const s = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0)
-        - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-      return { f, s };
-    },
-    sprint() { return keys.has('ShiftLeft') || keys.has('ShiftRight'); },
-    jump() { return keys.has('Space'); },
-    handbrake() { return keys.has('Space'); },
-    mouseDownNow() { return mouseDown; },
-    takeMouse() { const d = { dx: mouseDX, dy: mouseDY }; mouseDX = 0; mouseDY = 0; return d; },
-    takeActions() { const a = actions; actions = 0; return a; },
-    // Test / autopilot hooks: pretend a key is held, or queue an action.
-    press(code) { keys.add(code); },
-    release(code) { keys.delete(code); },
-    queue(action) { actions |= action; },
-  };
+  // is a key currently held
+  down(code) {
+    return this.keys.has(code);
+  }
+
+  // was a key pressed since the last frame (edge)
+  wasPressed(code) {
+    return this.pressed.has(code);
+  }
+
+  // consume per-frame edges and mouse deltas; call once per frame
+  endFrame() {
+    this.pressed.clear();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseClicked = false;
+  }
 }

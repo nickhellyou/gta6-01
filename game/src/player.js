@@ -1,124 +1,171 @@
-// player.js — the player on foot: third-person WASD movement relative to the
-// orbit camera, sprint, jump with gravity, and the camera itself (mouse orbit
-// with pointer lock, drag fallback, arrow-key turn). Driving is in vehicles.js.
-import * as THREE from 'three';
-import { CFG } from './config.js';
-import { clamp } from './random.js';
-import { resolveCollisions } from './city.js';
+// Ken, the wheelman, on foot: WASD movement relative to the camera,
+// sprint, jump, gravity, building collision, and stealing cars with E.
 
-export function makePlayerMesh(scene) {
-  const g = new THREE.Group();
-  const jacket = new THREE.MeshLambertMaterial({ color: 0xef476f });
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.0, 10), jacket);
-  body.position.y = 1.05; body.castShadow = true; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 10),
-    new THREE.MeshLambertMaterial({ color: 0xf1c27d }));
-  head.position.y = 1.82; head.castShadow = true; g.add(head);
-  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.29, 0.1, 12),
-    new THREE.MeshLambertMaterial({ color: 0x118ab2 }));
-  cap.position.y = 2.02; g.add(cap);
-  const legMat = new THREE.MeshLambertMaterial({ color: 0x22223b });
-  const legs = [];
-  for (const s of [-1, 1]) {
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 0.18), legMat);
-    leg.position.set(s * 0.15, 0.3, 0); g.add(leg); legs.push(leg);
-  }
-  // The pistol, visible in the hand once Sal arms you (after M1).
-  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.42),
-    new THREE.MeshLambertMaterial({ color: 0x1a1a1a }));
-  gun.position.set(0.42, 1.15, 0.25); gun.visible = false; g.add(gun);
-  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  scene.add(g);
-  return { mesh: g, legs, gun };
-}
+import * as THREE from 'three';
+import { TUNING } from './config.js';
+import { collidesWithBuildings, clampToCity } from './city.js';
+import { nearestCar } from './vehicles.js';
 
 export function createPlayer(scene) {
-  const visual = makePlayerMesh(scene);
+  const group = new THREE.Group();
+  const jacket = new THREE.MeshStandardMaterial({ color: 0x2e6fd8, roughness: 0.85 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.85, 0.36), jacket);
+  body.position.y = 1.05;
+  body.castShadow = true;
+  group.add(body);
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.25, 12, 10),
+    new THREE.MeshStandardMaterial({ color: 0xe8b98a, roughness: 0.8 }),
+  );
+  head.position.y = 1.74;
+  head.castShadow = true;
+  group.add(head);
+  const cap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.27, 0.27, 0.1, 12),
+    new THREE.MeshStandardMaterial({ color: 0xd23b3b, roughness: 0.8 }),
+  );
+  cap.position.y = 1.92;
+  group.add(cap);
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x22222a, roughness: 0.95 });
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.62, 0.24), legMat);
+  legL.position.set(-0.16, 0.31, 0);
+  group.add(legL);
+  const legR = legL.clone();
+  legR.position.x = 0.16;
+  group.add(legR);
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x2e6fd8, roughness: 0.85 });
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.7, 0.2), armMat);
+  armL.position.set(-0.42, 1.05, 0);
+  group.add(armL);
+  const armR = armL.clone();
+  armR.position.x = 0.42;
+  group.add(armR);
+  group.position.set(0, 0, 0);
+  scene.add(group);
   return {
-    visual,
-    pos: new THREE.Vector3(-27, 0, 60),
-    velY: 0,
-    yaw: 0,            // facing direction
-    camYaw: Math.PI,   // camera orbit around the player
+    group,
+    legL,
+    legR,
+    pos: new THREE.Vector3(21, 0, 21),
+    vel: new THREE.Vector3(),
+    vy: 0,
+    grounded: true,
+    heading: 0,
+    camYaw: Math.PI,
     camPitch: 0.32,
-    hp: CFG.playerMaxHp,
-    inCar: false,
+    onFoot: true,
+    health: TUNING.playerMaxHealth,
     car: null,
-    armed: false,      // pistol unlocked after M1
-    ammo: 0,
-    reserve: 0,
-    reloading: false,
-    reloadT: 0,
-    punchCd: 0,
-    speedKmh: 0,
-    onGround: true,
+    speed: 0,
     walkPhase: 0,
-    lastHurtAt: -99,
-    moving: false,
   };
 }
 
-// One fixed step of on-foot movement. Returns nothing; the camera is updated
-// in render.js from camYaw / camPitch / pos.
-export function stepPlayer(G, dt) {
-  const p = G.player;
-  if (p.inCar) return;
-  const mouse = G.input.takeMouse();
-  p.camYaw -= mouse.dx * 0.0032;
-  p.camPitch = clamp(p.camPitch + mouse.dy * 0.0022, -0.15, 0.9);
-  const mv = G.input.move();
-  const sprint = G.input.sprint();
-  const speed = sprint ? CFG.sprintSpeed : CFG.walkSpeed;
-  // Camera-relative movement: W runs away from the camera.
-  const fx = -Math.sin(p.camYaw), fz = -Math.cos(p.camYaw);
-  const rx = -fz, rz = fx;
-  let dx = fx * mv.f + rx * mv.s;
-  let dz = fz * mv.f + rz * mv.s;
-  const len = Math.hypot(dx, dz);
-  p.moving = len > 0.01;
-  if (p.moving) {
-    dx /= len; dz /= len;
-    p.yaw = Math.atan2(dx, dz);
-    let nx = p.pos.x + dx * speed * dt;
-    let nz = p.pos.z + dz * speed * dt;
-    const hit = resolveCollisions(G.city.colliders, nx, nz, CFG.playerRadius);
-    nx = hit.x; nz = hit.z;
-    p.pos.x = clamp(nx, -132, 132);
-    p.pos.z = clamp(nz, -132, 212);
-    p.walkPhase += dt * (sprint ? 13 : 9);
-    if (G.rng.chance(dt * (sprint ? 6 : 2))) {
-      G.effects.burst(p.pos.x, 0.1, p.pos.z, 0xccbbaa, 1, 0.6);
+// step the player: on foot movement, or car enter/exit. Returns nothing;
+// state.player.speed is updated for the HUD speedometer.
+export function updatePlayer(state, dt) {
+  const player = state.player;
+  const input = state.input;
+  if (!player.onFoot) {
+    // driving: keep the player mesh hidden and glued to the car seat
+    player.group.visible = false;
+    player.pos.copy(player.car.pos);
+    player.speed = Math.abs(player.car.speed) * 3.2;
+    if (input.wasPressed('KeyE')) {
+      exitCar(state);
     }
+    return;
   }
-  // Jump + gravity.
-  if (G.input.jump() && p.onGround) {
-    p.velY = CFG.jumpSpeed;
-    p.onGround = false;
+  player.group.visible = true;
+
+  // camera-relative movement
+  const fwd = (input.down('KeyW') || input.down('ArrowUp') ? 1 : 0) - (input.down('KeyS') || input.down('ArrowDown') ? 1 : 0);
+  const strafe = (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
+  const sprint = input.down('ShiftLeft') || input.down('ShiftRight');
+  const speed = sprint ? TUNING.sprintSpeed : TUNING.walkSpeed;
+  const sin = Math.sin(player.camYaw);
+  const cos = Math.cos(player.camYaw);
+  // camera looks toward -Z of its yaw; forward is away from camera
+  let mx = 0;
+  let mz = 0;
+  if (fwd !== 0 || strafe !== 0) {
+    mx = -sin * fwd + cos * strafe;
+    mz = -cos * fwd - sin * strafe;
+    const len = Math.hypot(mx, mz);
+    mx /= len;
+    mz /= len;
+    player.heading = Math.atan2(mx, mz);
   }
-  if (!p.onGround) {
-    p.velY -= CFG.gravity * dt;
-    p.pos.y += p.velY * dt;
-    if (p.pos.y <= 0) { p.pos.y = 0; p.velY = 0; p.onGround = true; }
+  player.speed = (fwd !== 0 || strafe !== 0) ? speed : 0;
+  const nx = player.pos.x + mx * speed * dt;
+  const nz = player.pos.z + mz * speed * dt;
+  if (!collidesWithBuildings(state.city, nx, nz, 0.5)) {
+    player.pos.x = nx;
+    player.pos.z = nz;
+  } else {
+    if (!collidesWithBuildings(state.city, nx, player.pos.z, 0.5)) player.pos.x = nx;
+    if (!collidesWithBuildings(state.city, player.pos.x, nz, 0.5)) player.pos.z = nz;
   }
-  p.speedKmh = p.moving ? speed * 3.6 : 0;
-  if (p.punchCd > 0) p.punchCd -= dt;
-  // Reload timer.
-  if (p.reloading) {
-    p.reloadT -= dt;
-    if (p.reloadT <= 0) {
-      const need = CFG.pistolMag - p.ammo;
-      const take = Math.min(need, p.reserve);
-      p.ammo += take; p.reserve -= take;
-      p.reloading = false;
-    }
+  const clamped = clampToCity(player.pos.x, player.pos.z);
+  player.pos.x = clamped.x;
+  player.pos.z = clamped.z;
+
+  // jump + gravity
+  if (player.grounded && input.wasPressed('Space')) {
+    player.vy = TUNING.jumpSpeed;
+    player.grounded = false;
   }
-  // Pose the mesh.
-  const v = p.visual;
-  v.mesh.position.copy(p.pos);
-  v.mesh.rotation.y = p.yaw;
-  v.gun.visible = p.armed;
-  const swing = p.moving ? Math.sin(p.walkPhase) * 0.45 : 0;
-  v.legs[0].rotation.x = swing;
-  v.legs[1].rotation.x = -swing;
-  v.mesh.visible = !p.inCar;
+  player.vy -= TUNING.gravity * dt;
+  player.pos.y += player.vy * dt;
+  if (player.pos.y <= 0) {
+    player.pos.y = 0;
+    player.vy = 0;
+    player.grounded = true;
+  }
+
+  // walk cycle: legs swing, body bobs
+  if (player.speed > 0) {
+    player.walkPhase += dt * (sprint ? 13 : 9);
+    const swing = Math.sin(player.walkPhase) * 0.55;
+    player.legL.rotation.x = swing;
+    player.legR.rotation.x = -swing;
+    player.group.position.y = Math.abs(Math.sin(player.walkPhase)) * 0.06;
+  } else {
+    player.legL.rotation.x = 0;
+    player.legR.rotation.x = 0;
+    player.group.position.y = 0;
+  }
+  player.group.position.set(player.pos.x, player.pos.y, player.pos.z);
+  player.group.rotation.y = player.heading;
+
+  // steal a nearby car with E
+  if (input.wasPressed('KeyE')) {
+    const car = nearestCar(state.cars, player.pos.x, player.pos.z, 3.2);
+    if (car) enterCar(state, car);
+  }
+}
+
+function enterCar(state, car) {
+  const player = state.player;
+  player.car = car;
+  car.kind = 'player';
+  car.steer = 0;
+  player.onFoot = false;
+  player.group.visible = false;
+  state.audio.uiClick();
+  state.hud.flash('Car stolen — wanted +1');
+  if (state.wanted < 5) state.wanted += 1;
+  state.events.steal = { x: car.pos.x, z: car.pos.z };
+}
+
+function exitCar(state) {
+  const player = state.player;
+  const car = player.car;
+  car.kind = 'parked';
+  car.speed = 0;
+  player.car = null;
+  player.onFoot = true;
+  player.pos.set(car.pos.x + Math.sin(car.heading + Math.PI / 2) * 2.2, 0, car.pos.z + Math.cos(car.heading + Math.PI / 2) * 2.2);
+  player.group.visible = true;
+  state.audio.setEngine(0, false);
 }

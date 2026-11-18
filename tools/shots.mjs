@@ -1,42 +1,94 @@
-// Headless screenshot runner for SOLMAR BAY. Loads each shot in shots.json,
-// waits for window.__shotReady, and saves a 1280x720 JPEG into screenshots/
-// under the name in shots.json. The dossier takes the images in name order,
-// the first the cover, so the file names ARE the presentation order:
-// 1-chase (mid-action police chase) first, then streets, mission, night.
-// Prints any console or page errors so a broken render is caught early.
-// Expects the game server (node serve.ts) already running on localhost:8080.
+// Solmar Bay screenshot tool: loads the game in headless Chromium, stages
+// each of the 4 shots (?shot=1..4) and saves a real render of the game as
+// a JPEG (1280x720, quality 82, kept under the 256 KiB cap). Run it with:
+//   node tools/shots.mjs
+// It serves game/ itself, so no separate server is needed.
+
 import { chromium } from 'playwright-core';
-import fs from 'node:fs';
-import path from 'node:path';
+import { createServer } from 'node:http';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { join, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const OUT = path.join(__dirname, '..', 'screenshots');
-const SHOTS = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'shots.json'), 'utf8'));
+const here = fileURLToPath(new URL('.', import.meta.url));
+const repoRoot = join(here, '..');
+const gameDir = join(repoRoot, 'game');
+const shotsDir = join(repoRoot, 'screenshots');
 
-const browser = await chromium.launch({
-  executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined,
-  args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
-});
-const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
-const errors = [];
-page.on('console', (m) => { if (m.type() === 'error') errors.push(`[console] ${m.text()}`); });
-page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}`));
-page.on('requestfailed', (r) => errors.push(`[requestfailed] ${r.url()} ${r.failure()?.errorText}`));
-fs.mkdirSync(OUT, { recursive: true });
-for (const { name, query } of SHOTS) {
-  const url = `http://localhost:8080/index.html${query}`;
-  await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+};
+
+const PORT = 18082;
+const server = createServer(async (req, res) => {
   try {
-    await page.waitForFunction(() => window.__shotReady === true, { timeout: 90000 });
+    const urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\//, '');
+    const file = normalize(join(gameDir, rel));
+    if (!file.startsWith(gameDir)) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return;
+    }
+    const data = await readFile(file);
+    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' });
+    res.end(data);
   } catch (e) {
-    errors.push(`[timeout] __shotReady never set for ${name}`);
-    continue;
+    res.writeHead(404);
+    res.end('not found');
   }
-  const file = path.join(OUT, name);
-  await page.screenshot({ path: file, type: 'jpeg', quality: 80 });
-  console.log(`${name}: ${fs.statSync(file).size} bytes`);
+});
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
-console.log('ERRORS:', errors.length ? errors.join('\n') : 'none');
-await browser.close();
-if (errors.length) process.exit(1);
+
+const SHOTS = [
+  { n: 1, name: '1-chase.jpg', wait: 6000, note: 'cover: stolen car + police chase + wanted stars + HUD/minimap' },
+  { n: 2, name: '2-streets.jpg', wait: 2500, note: 'on foot on Palmera Boulevard, traffic, palms, city signs' },
+  { n: 3, name: '3-mission.jpg', wait: 4500, note: 'shootout on the pier, objective beacon, sea' },
+  { n: 4, name: '4-night.jpg', wait: 6000, note: 'night chase, headlights, neon' },
+];
+
+async function main() {
+  await new Promise((r) => server.listen(PORT, r));
+  await mkdir(shotsDir, { recursive: true });
+  const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader'] });
+  const results = [];
+  try {
+    for (const shot of SHOTS) {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      page.on('console', (m) => {
+        if (m.type() === 'error') errors.push(m.text());
+      });
+      await page.goto(`http://localhost:${PORT}/?shot=${shot.n}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.__gameReady === true, { timeout: 15000 });
+      await page.mouse.click(640, 360);
+      await sleep(shot.wait);
+      const file = join(shotsDir, shot.name);
+      await page.screenshot({ path: file, type: 'jpeg', quality: 82 });
+      const stat = await readFile(file).then((b) => b.length).catch(() => 0);
+      const ok = stat > 0 && stat <= 262144 && errors.length === 0;
+      results.push({ ...shot, bytes: stat, errors, ok });
+      console.log(`${ok ? 'OK  ' : 'FAIL'} ${shot.name} — ${(stat / 1024).toFixed(0)} KiB — ${shot.note}${errors.length ? ' — ERRORS: ' + errors.slice(0, 2).join(' | ') : ''}`);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+    server.close();
+  }
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\n${results.length - failed.length}/${results.length} screenshots taken`);
+  if (failed.length) process.exit(1);
+}
+
+main();
